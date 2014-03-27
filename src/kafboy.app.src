@@ -1,0 +1,17 @@
+%% Feel free to use, reuse and abuse the code in this file.
+
+{application, kafboy, [
+    {description, "intelligen http wrapper over kafka"},
+    {vsn, "git"},
+    {modules, [kafboy_app,kafboy_sup,kafboy_startup_worker,kafboy_http_handler]},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        gproc,
+        cowboy,
+	exometer
+    ]},
+    {mod, {kafboy_app, []}},
+    {env, []}
+]}.

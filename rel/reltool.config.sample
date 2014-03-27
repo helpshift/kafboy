@@ -1,0 +1,83 @@
+{sys, [
+       {lib_dirs, ["../deps"]},
+       {erts, [{mod_cond, derived}, {app_file, strip}]},
+       {app_file, strip},
+       {rel, "node", "1",
+        [
+        compiler,
+        crypto,
+        gproc,
+        erlsha2,
+        cowboy,
+        inets,
+        kernel,
+        lager,
+        {mnesia,load},
+         public_key,
+         runtime_tools,
+         sasl,
+         ssl,
+         stdlib,
+         syntax_tools,
+        {jsx,load},
+        {ekafka,load},
+        kafboy,
+	exometer
+        ]},
+       {rel, "start_clean", "",
+        [
+         kernel,
+         stdlib,
+         sasl,
+         tools
+        ]},
+       {boot_rel, "node"},
+       {profile, embedded},
+       {incl_cond, derived},
+       {excl_archive_filters, [".*"]}, %% Do not archive built libs
+       {excl_sys_filters, ["^bin/.*", "^erts.*/bin/(dialyzer|typer)",
+                           "^erts.*/(doc|info|include|lib|man|src)"]},
+       {excl_app_filters, ["\.gitignore"]},
+       {app, inets, [{incl_cond, include}]},
+       {app, kernel, [{incl_cond, include}]},
+       {app, lager, [{incl_cond, include}]},
+       {app, mnesia, [{incl_cond, include}]},
+       {app, public_key, [{incl_cond, include}]},
+       {app, runtime_tools, [{incl_cond, include}]},
+       {app, sasl, [{incl_cond, include}]},
+       {app, snmp, [{incl_cond, include}]},
+       {app, ssl, [{incl_cond, include}]},
+       {app, stdlib, [{incl_cond, include}]},
+       {app, tools, [{incl_cond, include}]},
+       {app, syntax_tools, [{incl_cond, include}]},
+       {app, compiler, [{incl_cond, include}]},
+       {app, crypto, [{incl_cond, include}]},
+       {app, gproc, [{incl_cond, include}]},
+
+       {app, erlsha2, [{incl_cond, include}]},
+       {app, jsx, [{incl_cond, include}]},
+       {app, exometer, [{incl_cond, include}]},
+       {app, ekafka, [{mod_cond,app}, {incl_cond, include}]},
+       {app, cowboy, [{incl_cond, include}]},
+
+       {app, kafboy, [{mod_cond, app},{incl_cond,derived},{lib_dir,"../"}]}
+      ]}.
+
+{target_dir, "node"}.
+
+{overlay_vars, "vars.config"}.
+
+{overlay, [
+           {mkdir, "log/sasl"},
+           {copy, "files/erl", "\{\{erts_vsn\}\}/bin/erl"},
+           {copy, "files/nodetool", "\{\{erts_vsn\}\}/bin/nodetool"},
+
+           {template, "files/node", "bin/node"},
+           {template, "files/node.cmd", "bin/node.cmd"},
+
+       {copy, "files/start_erl.cmd", "bin/start_erl.cmd"},
+           {copy, "files/install_upgrade.escript", "bin/install_upgrade.escript"},
+           {template, "files/sys.config", "releases/\{\{rel_vsn\}\}/sys.config"},
+
+       {template, "files/vm.args", "releases/\{\{rel_vsn\}\}/vm.args"}
+          ]}.
