@@ -25,47 +25,65 @@ start(_StartType)->
 
 start(_StartType, _StartArgs) ->
 
+    case application:get_env(ekaf, ekaf_bootstrap_broker) of
+        undefined ->
+            io:format("~n %% KAFBOY WARNING",[]),
+            io:format("~n %% Please add an app env for the ekaf_bootstrap_broker",[]),
+            io:format("~n %% {ekaf, [ {ekaf_bootstrap_broker, {\"localhost\", 9091}} ]",[]),
+            io:format("~n %%",[]),
+            {stop,{missing,ekaf_bootstrap_broker}};
+        _ ->
+            start_with_ekaf(_StartType, _StartArgs)
+    end.
 
-    SyncUrl = case kafboy_startup_worker:read_env(sync_url) of
-                  {Url1,true}->
-                      Url1;
-                  _ ->
-                      ?KAFBOY_DEFAULT_SYNC_URL
-              end,
-    AsyncUrl = case kafboy_startup_worker:read_env(async_url) of
-                  {Url2,true}->
-                      Url2;
-                  _ ->
-                      ?KAFBOY_DEFAULT_ASYNC_URL
-              end,
+start_with_ekaf(_StartType, _StartArgs)->
+    Safe = get_default(kafboy_enable_safetyvalve, false),
+    SyncUrl = get_default(kafboy_sync_url,?KAFBOY_DEFAULT_SYNC_URL),
+    AsyncUrl = get_default(kafboy_async_url,?KAFBOY_DEFAULT_ASYNC_URL),
+    Port = get_default(kafboy_http_port,?KAFBOY_DEFAULT_HTTP_PORT),
+    EditJsonCallback = get_default(kafboy_callback_edit_json, undefined),
+
+    AuthCallback = get_default(kafboy_callback_auth, undefined),
+
+    InitState = #kafboy_http{ callback_edit_json  = EditJsonCallback, callback_auth = AuthCallback, safe = Safe },
 
     Dispatch = cowboy_router:compile([
                                       {'_', [
-                                             {SyncUrl, kafboy_http_handler, [{sync,true}]},
-                                             {AsyncUrl, kafboy_http_handler, [{sync,false}]}
+                                             {"/echo_post", kafboy_disco_handler,InitState},
+                                             {"/disco",     kafboy_disco_handler,InitState},
+
+                                             {SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ }},
+                                             {AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync = false}},
+
+                                             {"/batch/"++SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ batch=true}},
+                                             {"/batch/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, batch=true}},
+
+                                             {"/safe/"++SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ sync=true, safe=true}},
+                                             {"/safe/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, safe=true}},
+
+                                             {"/safe/batch/"++SyncUrl, kafboy_http_handler, InitState#kafboy_http{ batch=true, safe=true}},
+                                             {"/safe/batch/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, batch=true, safe=true}}
                                             ]}
                                      ]),
-    {ok, _} = cowboy:start_http(http, 100, [{port, 8000}], [
+    %?INFO_MSG("start with port ~p syncurl ~p asyncurl ~p",[Port,SyncUrl,AsyncUrl]),
+    {ok, _} = cowboy:start_http(http, 200, [{port, Port}], [
                                                             {env, [{dispatch, Dispatch}]}
                                                            ]),
     case kafboy_sup:start_link(_StartArgs) of
-    {ok,Pid}->
-        {ok,Pid};
-    _Error ->
-        {stop,_Error}
+        {ok,Pid}->
+            {ok,Pid};
+        _Error ->
+            {stop,_Error}
     end.
 
 -spec stop(State::any()) -> ok.
 stop(_State) ->
     ok.
 
-%% ===================================================================
-%% Tests
-%% ===================================================================
-%% -ifdef(TEST).
-%% simple_test() ->
-%%     ok = application:start(kafboy),
-%%     io:format("this is a simple test"),
-%%     ?debugMsg("Function simple_test starting..."),
-%%     ?assertNot(undefined == whereis(kafbo_sup)).
-%%-endif.
+get_default(Key,Default)->
+    case kafboy_startup_worker:read_env(Key) of
+        {true,Val}->
+            Val;
+        _ ->
+            Default
+    end.

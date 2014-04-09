@@ -1,10 +1,13 @@
-%% @doc POST echo handler.
+%% @doc
+%% web server that allows editing the json before sending to kafka
+%% @end
 -module(kafboy_http_handler).
-
+-behaviour(cowboy_loop_handler).
 -export([init/3]).
--export([handle/2]).
+-export([handle/2, handle_method/3, handle_url/4, info/3]).
 -export([terminate/3]).
 
+-export([test_callback_edit_json/2]).
 
 %% includes
 -include("kafboy_definitions.hrl").
@@ -12,36 +15,116 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-init(_Transport, Req, Opts) ->
-    %?INFO_MSG("new request with options ~p",[Opts]),
-    {ok, Req, Opts}.
+test_callback_edit_json(PropList,Callback)->
+    Callback(PropList).
 
-handle(Req, State) ->
-    {Method, Req2} = cowboy_req:method(Req),
-    HasBody = cowboy_req:has_body(Req2),
-    {ok, Req3} = maybe_echo(Method, HasBody, Req2, State),
-    {ok, Req3, State}.
+init(_Transport, Req, InitState) ->
+    {Method, _} = cowboy_req:method(Req),
+    handle_method(Method, Req, InitState).
 
-maybe_echo(<<"POST">>, true, Req, State) ->
-    {ok, PostVals, Req2} = cowboy_req:body_qs(Req),
-    echo(PostVals, Req2, State);
-maybe_echo(<<"POST">>, false, Req, State) ->
-    cowboy_req:reply(400, [], <<"Missing body.">>, Req);
-maybe_echo(_, _, Req, State) ->
-    %% Method not allowed.
-    cowboy_req:reply(405, Req).
+%% if not safe, then directly call handle_edit_json_callback
+%% if safe, then safetyvalve is called if sv thinks its ok
+handle_method(<<"POST">>, Req, #kafboy_http{ safe = false } = State)->
+    {ok, Body, _} = cowboy_req:body_qs(Req),
+    handle_edit_json_callback(Body, Req, State);
 
-echo(Echo, Req, State) ->
-    {Debug,_} = cowboy_req:qs_val(<<"DBG">>,Req,false),
-    case Debug of
-        <<"1">> ->
-            io:format("~n for url: ~p reply with ~p ~nstate:~p",[cowboy_req:host_url(Req),Echo,State]);
+handle_method(<<"POST">>, Req, State)->
+    {ok, Body, _} = cowboy_req:body_qs(Req),
+    case sv:run(kafboy_q, fun() ->
+                                  handle_edit_json_callback(Body, Req, State)
+                          end) of
+        {ok,Next} ->
+            Next;
+        {error, queue_full} = Error->
+            ?INFO_MSG("error, queue_full",[]),
+            {ok, Req, Error};
+        {error, overload} = Error ->
+            ?INFO_MSG("error, queue_overload",[]),
+            {ok, Req, Error}
+    end;
+handle_method(_, Req, State)->
+   fail(<<"unexp">>, Req, State).
+
+handle_edit_json_callback(Body, Req, #kafboy_http{ callback_edit_json = Callback} = State)->
+    case Callback of
+        {M,F} when is_atom(M), is_atom(F)->
+            NextCallback = fun(NextBody)->
+                               self() ! {edit_json_callback, NextBody}
+                       end,
+            M:F(Body,NextCallback);
         _ ->
-            ok
+            %?INFO_MSG("no callback , just send",[]),
+            self() ! {edit_json_callback, Body}
     end,
-    cowboy_req:reply(200, [
-                           {<<"content-type">>, <<"application/json; charset=utf-8">>}
-                          ], jsx:encode(Echo), Req).
+    {loop, Req, State, 1000}.
+
+handle(Req, {error,queue_full}=State)->
+    fail(<<"system queue full">>, Req, State);
+handle(Req, {error,overload}=State)->
+    fail(<<"system overload">>, Req, State);
+handle(Req, State)->
+    {Method, _} = cowboy_req:method(Req),
+    handle_method(Method, Req, State).
+
+fail(Msg, Req, State) ->
+    ?INFO_MSG("handle ~s",[Msg]),
+    {ok, Req1} = cowboy_req:reply(503, [], <<"Unexpected">>, Req),
+    {ok, Req1, State}.
+
+info({edit_json_callback,[]}, Req, State)->
+    Req1 = reply("{\"error\":\"empty\"}",Req),
+    {ok, Req1, State};
+info({edit_json_callback,Body}, Req, State)->
+    %% Produce to topic
+
+    %% See bosky101/ekaf for what happens under the hood
+    %% connection pooling, batched writes, and so on
+
+    {ok,Req1} =
+        case cowboy_req:path(Req) of
+            {Url,_} ->
+                handle_url(Url, Body, Req, State);
+            _Path ->
+                ?INFO_MSG("dont know what to do with ~p",[_Path]),
+                reply("{\"error\":\"invalid\"}",Req)
+        end,
+    {ok, Req1, State};
+info(Message, Req, State) ->
+    ?INFO_MSG("unexp ~p",[Message]),
+    {ok,Req1} = reply("{\"error\":\"invalid\"}",Req),
+    {ok, Req1, State}.
+
+handle_url(<<"/safe/",Url/binary>>, Body, Req, State)->
+     handle_url(<<"/",Url/binary>>, Body, Req, State);
+handle_url(Url, Body, Req, _State)->
+    Json = jsx:encode(Body),
+    case Url of
+        <<"/sync/",Topic/binary>> ->
+            ProduceResponse = kafboy_producer:sync(Topic, Json, []),
+            %% in case you want to create your own list, see the below function
+            ResponseList = ekaf_lib:response_to_proplist(ProduceResponse),
+            ResponseJson = jsx:encode(ResponseList),
+            reply(ResponseJson,Req);
+
+        <<"/batch/sync/",Topic/binary>> ->
+            _ProduceResponse = kafboy_producer:sync_batch(Topic, Json, []),
+            reply("{\"ok\":true}",Req);
+
+        <<"/async/",Topic/binary>> ->
+            _ProduceResponse = kafboy_producer:async(Topic, Json, []),
+            reply("{\"ok\":true}",Req);
+
+        <<"/batch/async/",Topic/binary>> ->
+            _ProduceResponse = kafboy_producer:async_batch(Topic, Json, []),
+            reply("{\"ok\":true}",Req);
+
+        _Path ->
+            ?INFO_MSG("dont know what to do with ~p",[_Path]),
+            reply("{\"error\":\"invalid\"}",Req)
+    end.
 
 terminate(_Reason, _Req, _State) ->
     ok.
+
+reply(Json,Req)->
+    cowboy_req:reply(200,[{<<"content-type">>, <<"application/json; charset=utf-8">>}], Json, Req).

@@ -3,46 +3,36 @@
 -behaviour(gen_server).
 
 %% API
--export([log/4, info/0, profile_modules/1, read_env/1]).
--export([get_bin_path/0, get_pid_file/0, load_drivers/1,
-
-     set_cookie/1, initSpawns/0,wait_for_tables/1,wait_for_tables_done/1,
-
-     kickoff/1,
-     kickoff_master/1,kickoff_master_new_node/1,kickoff_master_restart/1,
-     kickoff_slave/1,
-
-     slave_added/1,
-
-     setup_metrics/0, later/0
+-export([
+         get_child_spec/0, get_child_spec/1, read_env/1,
+         cookie_setup/0,
+         kickoff/1,
+         kickoff_master/1,kickoff_master_new_node/1,kickoff_master_restart/1,
+         kickoff_slave/1,
+         slave_added/1,
+         setup_metrics/0, later/0, bootup/0,
+         log/4, info/0, profile_modules/1, get_bin_path/0
     ]).
-%% includes
--include("kafboy_definitions.hrl").
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
--define(MNESIA_WAIT_TABLES,[kafboy_route]).
--define(MNESIA_WAIT_TIMEOUT,500000).
-
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
 %% ------------------------------------------------------------------
 -export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
--export([ get_child_spec/1 ]).
+
+%% includes
+-include("kafboy_definitions.hrl").
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 
 %% Constants
 -define(SERVER, ?MODULE).
 -define(WORKER_PREFIX,"kafboy_startup_").
--define(PG_PREFIX, "it_startup_pg_").
--define(RECHECK_STRATEGY,recheck).
--define(RECHECK_DELAY, 10).
 -define(DISABLED,false).
 -define(DEBUG,false).
 -define(MAX_WORKERS,1).
--record(state, {ctr=0}).
 
 %%%===================================================================
 %%% API
@@ -53,14 +43,13 @@ log(Mod,Line,Format, Args)->
 info()->
     gen_server:call(?SERVER,info).
 
-profile_modules(Args)->
+profile_modules(_Args)->
     application:start(runtime_tools),
 
     case ?MODULE:read_env(kafboy_profiling_apps) of
         {ProfilingApps,true} ->
             [ application:start(ProfilingApp) || ProfilingApp <- ProfilingApps ];
         _E ->
-            ?INFO_MSG("ignore ~p",[_E]),
             ok
     end,
 
@@ -103,203 +92,122 @@ start_link(Args) ->
 get_child_spec()->
     ?MODULE:get_child_spec(?MAX_WORKERS).
 
-get_child_spec(NoOfWorkers)->
-    XWorkers = lists:map(fun( X )->
-                WorkerId = list_to_atom(?WORKER_PREFIX++ integer_to_list(X)),
-                {WorkerId, {?MODULE, start_link, [{WorkerId}] },
-            permanent, 2000, worker, [?MODULE]}
-    end, lists:seq(1,NoOfWorkers)),
+get_child_spec(_NoOfWorkers)->
     Worker = {kafboy_startup_worker, {kafboy_startup_worker, start_link, [[read_env(trace),read_env(debug), read_env(fresh)]] }, temporary, 2000, worker, dynamic},
-    %Eredis = {eredis, {eredis, start, [eredisclient]}, temporary, 2000, worker, dynamic},
-    Workers = [
-           Worker
-           %,Eredis
-          ],
-    Workers.
+    [Worker].
 
 read_env(Field) ->
     Got = application:get_env(kafboy,Field),
-    R = case Got of
-        {ok,_R} ->
-        _R;
-        _E ->
-        false
-    end,
-    %?INFO_MSG("application:get_env(kafboy,~p) => ~p read_env=> {~p,~p}",[Field,Got,Field,R]),
-    {Field,R}.
+    case Got of
+        {ok,Val} ->
+            {true,Val};
+            _E ->
+                {false,Field}
+    end.
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 init(Args) ->
     %% Note: don't call ?INFO_MSG until here
-    io:format("~n init ~p with ~p",[?MODULE,Args]),
-    Set = profile_modules(Args),
+    Set = ?MODULE:profile_modules(Args),
+
+    %% your {kafboy,[]} app config can decide whether to trace calls
     State =  #kafboy_startup{logging=#kafboy_enabled{modules=Set}},
-    %Kickoff = ?MODULE:kickoff(Args),
+
+    ?MODULE:kickoff(Args),
+
     {ok, State}.
 
 kickoff(Args)->
 
     %% deps
-    A = sha:start(),
+    %%A = sha2:start(),
+    A = ok,
 
     %% security
-    B = ?MODULE:set_cookie(Args),
-    ?INFO_MSG("set cookie, now kickoff based on ~p",[application:get_env(kafboy,master)]),
+    B = ?MODULE:cookie_setup(),
 
     %% master vs slave
     C = case ?MODULE:read_env(kafboy_master) of
             {_,true} ->
-                ?INFO_MSG("start master",[]),
                 kickoff_master(Args);
             _ ->
-                ?INFO_MSG("start slave",[]),
                 kickoff_slave(Args)
         end,
-
-
-    %% starting registered process alias's
-    D = ?MODULE:initSpawns(),
 
     {ok,[
      {sha,A},
      {cookie,B},
-     {kickoff,C},
-     {spawns,D}
+     {kickoff,C}
     ]}.
 
 kickoff_master(Args)->
-    %% db
+    %% Boilerplate for future distributed work.
+    %% For now just joins cluster
     case ?MODULE:read_env(kafboy_fresh) of
-    {_,true} ->
-        ?INFO_MSG("asked to kickoff new node since value of new in ~p",[Args]),
-        ?MODULE:kickoff_master_new_node(Args),
-        ok;
-    NotTrue->
-        ?INFO_MSG("asked to kickoff restart since value of new in ~p is ~p, ~nknown nodes are ~p",[Args,NotTrue,nodes()]),
-        ?MODULE:kickoff_master_restart(Args),
-        ok
-    end,
-
-    ?INFO_MSG("begin waiting for tables...",[]),
-    case catch ?MODULE:wait_for_tables(?MNESIA_WAIT_TIMEOUT) of
-    {'EXIT',_Er}->
-        io:format("back in wait table donem with error ~p",[_Er]);
-
-    Apps ->
-        io:format("~n back in wait tables done with ~p",[Apps])
+        {_,true} ->
+            ?INFO_MSG("asked to kickoff new node since value of new in ~p",[Args]),
+            ?MODULE:kickoff_master_new_node(Args),
+            ok;
+        NotTrue->
+            ?INFO_MSG("asked to kickoff restart since value of new in ~p is ~p, ~nknown nodes are ~p",[Args,NotTrue,nodes()]),
+            ?MODULE:kickoff_master_restart(Args),
+            ok
     end,
 
     later_master().
 
-kickoff_master_new_node(Args)->
-    %% init db
-    % kafboy_mgr_db:new(),
+kickoff_master_new_node(_Args)->
     ?INFO_MSG("done kickoff new node",[]),
     ok.
 
-kickoff_master_restart(Args)->
-
+kickoff_master_restart(_Args)->
     ?INFO_MSG("going to call kafboy_mgr_db:init/0",[]),
-
-    %% start db
-    %A = kafboy_mgr_db:start().
-
     ok.
 
-kickoff_slave(Args)->
+kickoff_slave(_Args)->
     %% ask master to allow location transparent access
     %%  of tables to this node
-    DiscoUrl = case ?MODULE:read_env(kaboy_is_master) of
-           {_,true} ->
-               "http://TODO:5282/disco";
-           _ ->
-               "http://localhost:5282/disco"
-           end,
-    ?INFO_MSG("Going to contact master by pinging ~p",[DiscoUrl]),
+    case ?MODULE:read_env(kafboy_load_balancer) of
+        {DiscoUrl,true} ->
+            case httpc:request(get, {DiscoUrl, []}, [
+                                                     %% TODO: ssl support ?
+                                                     %% {ssl,[{verify,verify_peer}]}
+                                                    ], [{sync, true}]) of
+                {ok,{_Status, _Headers, Result}} ->
+                    MasterNode = list_to_atom(Result),
+                    ping_master(MasterNode),
+                    ok;
+                _E ->
+                    ?INFO_MSG("Cant ping master since didnt get expected node as result for /disco => ~n~p",[_E])
+            end;
 
-    case httpc:request(get, {DiscoUrl, []}, [
-                        %{ssl,[{verify,verify_peer}]}
-                        ], [{sync, true}]) of
-    {ok,{_Status, _Headers, Result}} ->
-        MasterNode = list_to_atom(Result),
-        ping_master(MasterNode),
-        ok;
-    _E ->
-        ?INFO_MSG("Cant ping master since didnt get expected node as result for /disco => ~n~p",[_E])
-    end.
+        _ ->
+            ok
+    end,
+    later_slave().
 
 ping_master(MasterNode)->
     SelfNode = node(),
 
     A = net_adm:ping(MasterNode),
 
-    ?INFO_MSG("Slave pinging master ~p gave ~p, starting mnesia",[MasterNode,A]),
+    ?INFO_MSG("Slave ~p pinging master ~p gave ~p",[SelfNode,MasterNode,A]),
 
-    mnesia:start(),
-
-    B = rpc:call(MasterNode, ?MODULE, slave_added, [SelfNode]),
-    ?DEBUG_MSG("Slave rpc master ~p gave ~p",[B]),
-
-    C = later_slave(),
-
-    {MasterNode,[A,B,C]}.
+    A.
 
 
-slave_added(SlaveNode)->
-    R =  mnesia:change_config(extra_db_nodes,nodes()),
-    ?INFO_MSG("adding location transparency ~p, nodes is ~p",
-          [R,nodes()]),
-    R.
-
-set_cookie(Args)->
-    FinalCookieVal = case ?MODULE:read_env(kafboy_cookie) of
-              {_,CookieVal} ->
-                 CookieVal;
-             _ ->
-                 ?INFO_MSG("expected cookie in vars. using default instead",[]),
-                 ?KAFBOY_DEFAULT_COOKIE_ERLANG
-             end,
-    ?INFO_MSG("setting cookie to node '~p' as '~p'",[node(),FinalCookieVal]),
-    erlang:set_cookie(node(),FinalCookieVal).
-
-initSpawns()->
-    %% starting mnesia related registed process alias's
-    % _A = kafboy_mgr_db:initSpawns(),
-
+slave_added(_SlaveNode)->
     ok.
 
-wait_for_tables(Started)->
-    case mnesia:wait_for_tables(?MNESIA_WAIT_TABLES,?MNESIA_WAIT_TIMEOUT) of
-        ok->
-            ?MODULE:wait_for_tables_done("within "++ integer_to_list(Started));
-        _E1  ->
-            Rem = Started rem (?MNESIA_WAIT_TIMEOUT * 300) ,
-            case Rem of
-                0 ->
-                    io:format("still waiting after 10 attempts",[]),
-                    timer:apply_after(?MNESIA_WAIT_TIMEOUT, ?MODULE, wait_for_tables, [Started+?MNESIA_WAIT_TIMEOUT]),
-                    ok;
-                _E2 ->
-                    io:format("~nnope,still wait...~p",[_E2]),
-                    timer:apply_after( ?MNESIA_WAIT_TIMEOUT, ?MODULE, wait_for_tables, [Started+?MNESIA_WAIT_TIMEOUT] ),
-                    ok
-            end
+cookie_setup()->
+    case ?MODULE:read_env(kafboy_set_cookie) of
+        {CookieVal,true} ->
+            erlang:set_cookie(node(),CookieVal);
+        _ ->
+            ok
     end.
-
-wait_for_tables_done(Msg)->
-
-
-    %% anything that needs mnesia to function, can be called here
-    ToRun = [
-              %some app:start()
-            ],
-
-    %some callback
-
-    ToRun.
-
 
 handle_call({log,enable_module,Mod},_From, State) ->
     PresentSet = (State#kafboy_startup.logging)#kafboy_enabled.modules,
@@ -317,7 +225,7 @@ handle_call({log,disable_module,Mod},_From, State)->
     NextState = State#kafboy_startup{logging=NextLogging},
     {reply, ok, NextState};
 
-handle_call({trace_enable_module,Mod},_From, State)->
+handle_call({trace_enable_module,_Mod},_From, State)->
     {reply, false, State};
 
 handle_call(_Msg,_From, State)->
@@ -354,39 +262,24 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
-load_drivers(_)->
-    ok.
-
 get_bin_path() ->
     case os:getenv("BIN_PATH") of
-    false ->
-        case code:priv_dir(kafboy) of
-        {error, _} ->
-            ".";
-        Path ->
+        false ->
+            case code:priv_dir(kafboy) of
+                {error, _} ->
+                    ".";
+                Path ->
             filename:join([Path, "bin"])
-        end;
-    Path ->
-        Path
+            end;
+        Path ->
+            Path
     end.
-
-%% @spec () -> false | string()
-get_pid_file() ->
-    case os:getenv("PID_PATH") of
-    false ->
-        false;
-    "" ->
-        false;
-    Path ->
-        Path
-    end.
-
 
 later()->
     case ?KAFBOY_AUTOSTART of
         true ->
             spawn(fun()->
-                          receive X -> ok
+                          receive _X -> ok
                           after 5000 ->
                                   ?MODULE:bootup()
                           end
@@ -403,6 +296,9 @@ later_slave()->
     later(),
     ok.
 
+bootup()->
+    ok.
+
 setup_metrics()->
     Metrics = metrics(),
 
@@ -415,33 +311,4 @@ setup_metrics()->
           end, Metrics).
 
 metrics()->
-    exometer:new([erlang,memory], {function,erlang,memory,['$dp'], value,
-                                   [total,processes,ets,binary,atom,
-                                    atom_used,maximum]}),
-
-    exometer:new([erlang, statistics], {function, erlang, statistics, ['$dp'], value,
-                                        [run_queue]}),
-
-    exometer:new([erlang, system_info], {function, erlang, system_info, ['$dp'], value,
-                                         [logical_processors, logical_processors_available, logical_processors_online,
-                                          port_count, port_limit, process_count, process_limit, thread_pool_size]}),
-
-    StatsSrv = {stress_exometer_srv,
-                {stress_exometer_srv, start_link, []},
-                permanent,
-                5000,
-                worker,
-                []},
-    [
-
-     % ?KAFBOY_EVENT_DB_ERROR_BIN,
-     % ?KAFBOY_EVENT_DB_TIMEOUT_BIN,
-
-     % ?KAFBOY_EVENT_CACHE_HIT_BIN,
-     % ?KAFBOY_EVENT_CACHE_MISS_BIN,
-
-     % ?KAFBOY_EVENT_ROUTING_BIN,
-     % ?KAFBOY_EVENT_ROUTING_OK_BIN,
-     % ?KAFBOY_EVENT_ROUTING_FAILED_BIN
-
-    ].
+    [].

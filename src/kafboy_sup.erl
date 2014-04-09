@@ -80,16 +80,19 @@ init(InitArgs) ->
 %%====================================================================
 %% Internal functions
 %%====================================================================
+start_child(Module,ChildSpec) when is_tuple(ChildSpec) ->
+    supervisor:start_child(Module,ChildSpec);
+
 start_child(Module,InitArgs) ->
     case Module:get_child_spec(InitArgs) of
-    [] ->
-        ?INFO_MSG("not starting ~p since []",[InitArgs]),
-        ok;
-    [ChildSpec] ->
-        supervisor:start_child(Module,ChildSpec);
-    _E ->
-        error_logger:info_msg("~n ~p unexp when start_child. got ~p",[Module,_E]),
-        error
+        [] ->
+            ?INFO_MSG("not starting ~p since []",[InitArgs]),
+            ok;
+        [ChildSpec] ->
+            start_child(Module,ChildSpec);
+        _E ->
+            error_logger:info_msg("~n ~p unexp when start_child. got ~p",[Module,_E]),
+            error
     end.
 
 kill_child(SID) ->

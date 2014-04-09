@@ -11,11 +11,14 @@
 log(Format,Args)->
     ?INFO_MSG(Format,Args).
 
-info_msg(Mod,Line,Format,Args)->
-    lager:info(Format,Args).
+info_msg(_Mod,_Line,Format,Args)->
+    %not using lager
+    %lager:info(Format,Args).
+    ?INFO_MSG(Format,Args).
 
 enabled_modules()->
     [
+     %add modules you want traced here: eg
      %kafboy_http_handler
     ].
 

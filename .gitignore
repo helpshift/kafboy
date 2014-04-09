@@ -1,7 +1,13 @@
 .eunit
+.rebar
+rebar
+.dialyzer_plt
 deps
+doc/
+ebin
+rel/ekafka/
 *.o
 *.beam
 *.plt
-erl_crash.dump
-
+user_default.erl
+.DS_*

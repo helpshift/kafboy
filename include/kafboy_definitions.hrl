@@ -3,6 +3,7 @@
 %%======================================================================
 -define(KAFBOY_DEFAULT_SYNC_URL        , "/sync/:topic/").
 -define(KAFBOY_DEFAULT_ASYNC_URL       , "/async/:topic/").
+-define(KAFBOY_DEFAULT_HTTP_PORT       , 8000).
 %%======================================================================
 %% Debugging Toggles
 %%======================================================================
@@ -12,37 +13,6 @@
 %%======================================================================
 %% Macros
 %%======================================================================
--define(INFO_MSG(Format, Args),
-    case application:get_env(kafboy,enable_logging) of
-         {ok,true} ->
-            lager:info
-              ("~p:~p ~p:"++Format, [?MODULE, ?LINE, self()]++Args);
-        _ ->
-            io:format
-          ("~n~p:~p ~p:"++Format, [?MODULE, ?LINE, self()]++Args)
-    end
-       ).
-
--define(ERROR_MSG(Format, Args),
-        case application:get_env(kafboy,enable_logging) of
-            {ok,true} ->
-                lager:error("~p:~p "++Format++"~n~p", [?MODULE, ?LINE]++Args++[erlang:get_stacktrace()]);
-        _ ->
-                io:format("~n{~p:~p ~p}:"++Format++"~n~p", [?MODULE, ?LINE, self()]++Args++[erlang:get_stacktrace()])
-    end
-       ).
-
--define(DEBUG_MSG(Format, Args),
-        case application:get_env(kafboy,enable_logging) of
-            {ok,true} ->
-                lager:debug(Format,Args);
-            _ ->
-                ok
-        end
-       ).
-
--define(record_to_list(Rec, Ref), lists:zip(record_info(fields, Rec),tl(tuple_to_list(Ref)))).
-
 -include("kafboy_records.hrl").
 %%======================================================================
 %% Database
@@ -52,7 +22,7 @@
 %%======================================================================
 -define(KAFBOY_DEFAULT_COOKIE_ERLANG,<<"afkak">>).
 %-include("kafboy_creds.hrl").
-
+-include_lib("ekaf/include/ekaf_definitions.hrl").
 %%======================================================================
 %% Configs
 %%======================================================================
@@ -63,4 +33,8 @@
 %%======================================================================
 -define(KAFKA_STATSS_NS      , <<"kafboy">>).
 
+%%======================================================================
+%% Records
+%%======================================================================
 %%-include("kaboy_literals.hrl").
+-record(kafboy_http, { ctr = 0::integer(), sync=false::boolean(), batch=false::boolean(), safe=false::boolean(), error, callback_edit_json, callback_auth}).
