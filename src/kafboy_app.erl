@@ -66,9 +66,13 @@ start_with_ekaf(_StartType, _StartArgs)->
                                             ]}
                                      ]),
     %?INFO_MSG("start with port ~p syncurl ~p asyncurl ~p",[Port,SyncUrl,AsyncUrl]),
-    {ok, _} = cowboy:start_http(http, 200, [{port, Port}], [
-                                                            {env, [{dispatch, Dispatch}]}
-                                                           ]),
+    {ok, _Ref} = cowboy:start_http(http, 100, [{port, Port}], [
+                                                              {env, [{dispatch, Dispatch}]}
+                                                              ,{backlog, 4096}
+                                                              ,{max_connections, 10000}
+                                                              %,{max_keepalive, 150}
+                                                              %,{timeout,100}
+                                                              ]),
     case kafboy_sup:start_link(_StartArgs) of
         {ok,Pid}->
             {ok,Pid};

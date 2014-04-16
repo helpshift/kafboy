@@ -45,6 +45,8 @@ Requests that begin with /safe/ will look for a `safetyvalve` entry to make the 
 
 Here is an example safetyvalve entry expected
 
+     %Note: You will have to add safetyvalve to your rebar.config or release as a dependency
+     %      for /safe/ urls to function as expected
      {safetyvalve,
          [{queues, [
              {kafboy_q, [{hz, 50}, {rate, 1000}, {token_limit, 10000}, {size, 300000}, {concurrency, 300000}]}]

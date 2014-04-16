@@ -25,13 +25,12 @@ init(_Transport, Req, InitState) ->
 %% if not safe, then directly call handle_edit_json_callback
 %% if safe, then safetyvalve is called if sv thinks its ok
 handle_method(<<"POST">>, Req, #kafboy_http{ safe = false } = State)->
-    {ok, Body, _} = cowboy_req:body_qs(Req),
-    handle_edit_json_callback(Body, Req, State);
+    handle_edit_json_callback(Req, State);
 
 handle_method(<<"POST">>, Req, State)->
-    {ok, Body, _} = cowboy_req:body_qs(Req),
     case sv:run(kafboy_q, fun() ->
-                                  handle_edit_json_callback(Body, Req, State)
+                                  io:format("~n via sv",[]),
+                                  handle_edit_json_callback(Req, State)
                           end) of
         {ok,Next} ->
             Next;
@@ -45,17 +44,20 @@ handle_method(<<"POST">>, Req, State)->
 handle_method(_, Req, State)->
    fail(<<"unexp">>, Req, State).
 
-handle_edit_json_callback(Body, Req, #kafboy_http{ callback_edit_json = Callback} = State)->
-    case Callback of
-        {M,F} when is_atom(M), is_atom(F)->
-            NextCallback = fun(NextBody)->
-                               self() ! {edit_json_callback, NextBody}
-                       end,
-            M:F(Body,NextCallback);
-        _ ->
-            %?INFO_MSG("no callback , just send",[]),
-            self() ! {edit_json_callback, Body}
-    end,
+handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = Callback} = State)->
+    Self = self(),
+    spawn(fun()->
+                  {ok, Body, _} = cowboy_req:body_qs(Req),
+                  case Callback of
+                      {M,F} when is_atom(M), is_atom(F)->
+                          NextCallback = fun(NextBody)->
+                                                 Self ! {edit_json_callback, NextBody}
+                                         end,
+                          M:F(Req, Body, NextCallback);
+                      _ ->
+                          Self ! {edit_json_callback, Body}
+                  end
+          end),
     {loop, Req, State, 1000}.
 
 handle(Req, {error,queue_full}=State)->
@@ -66,65 +68,80 @@ handle(Req, State)->
     {Method, _} = cowboy_req:method(Req),
     handle_method(Method, Req, State).
 
-fail(Msg, Req, State) ->
-    ?INFO_MSG("handle ~s",[Msg]),
-    {ok, Req1} = cowboy_req:reply(503, [], <<"Unexpected">>, Req),
-    {ok, Req1, State}.
+fail({error,Msg}, Req, _State) ->
+    fail(Msg,Req,_State);
+fail(Msg, Req, _State) when is_binary(Msg) ->
+    {ok,Req1} = cowboy_req:reply(500,[{<<"content-type">>, <<"application/json; charset=utf-8">>}], <<"{\"error\":\"",Msg/binary,"\"}">>, Req),
+    {ok, Req1, undefined};
+fail(_Msg, Req, _State) ->
+    Req1 = cowboy_req:reply(500, [], <<"{\"error\":\"unknown\"">>, Req),
+    {ok, Req1, undefined}.
 
-info({edit_json_callback,[]}, Req, State)->
-    Req1 = reply("{\"error\":\"empty\"}",Req),
-    {ok, Req1, State};
+info({edit_json_callback,{error,_}=Error}, Req, _State)->
+    fail(Error,Req,_State);
+info({edit_json_callback,[]}, Req, _State)->
+    fail({error,<<"empty">>},Req, _State);
 info({edit_json_callback,Body}, Req, State)->
     %% Produce to topic
 
     %% See bosky101/ekaf for what happens under the hood
     %% connection pooling, batched writes, and so on
 
-    {ok,Req1} =
-        case cowboy_req:path(Req) of
-            {Url,_} ->
-                handle_url(Url, Body, Req, State);
-            _Path ->
-                ?INFO_MSG("dont know what to do with ~p",[_Path]),
-                reply("{\"error\":\"invalid\"}",Req)
-        end,
-    {ok, Req1, State};
+    case cowboy_req:path(Req) of
+        {Url,_} ->
+            handle_url(Url, Body, Req, State);
+        _Path ->
+            ?INFO_MSG("dont know what to do with ~p",[_Path]),
+            fail(<<"invalid">>,Req,State)
+    end;
 info(Message, Req, State) ->
     ?INFO_MSG("unexp ~p",[Message]),
-    {ok,Req1} = reply("{\"error\":\"invalid\"}",Req),
-    {ok, Req1, State}.
+    fail({error,<<"unexp">>}, Req, State).
 
 handle_url(<<"/safe/",Url/binary>>, Body, Req, State)->
-     handle_url(<<"/",Url/binary>>, Body, Req, State);
-handle_url(Url, Body, Req, _State)->
-    Json = jsx:encode(Body),
+    handle_url(<<"/",Url/binary>>, Body, Req, State);
+handle_url(_Url, {error,Reason}, Req, State)->
+    fail(Reason, Req, State);
+handle_url(Url, Message, Req, State)->
     case Url of
         <<"/sync/",Topic/binary>> ->
-            ProduceResponse = kafboy_producer:sync(Topic, Json, []),
+            ProduceResponse = kafboy_producer:sync(Topic, Message, []),
             %% in case you want to create your own list, see the below function
             ResponseList = ekaf_lib:response_to_proplist(ProduceResponse),
             ResponseJson = jsx:encode(ResponseList),
             reply(ResponseJson,Req);
 
         <<"/batch/sync/",Topic/binary>> ->
-            _ProduceResponse = kafboy_producer:sync_batch(Topic, Json, []),
-            reply("{\"ok\":true}",Req);
+            R = reply("{\"ok\":1}",Req),
+            spawn(fun()->
+                          kafboy_producer:sync_batch(Topic, Message, [])
+                  end),
+            R;
 
         <<"/async/",Topic/binary>> ->
-            _ProduceResponse = kafboy_producer:async(Topic, Json, []),
-            reply("{\"ok\":true}",Req);
+            R = reply("{\"ok\":1}",Req),
+            spawn(fun()->
+                          kafboy_producer:async(Topic, Message, [])
+                  end),
+            R;
 
         <<"/batch/async/",Topic/binary>> ->
-            _ProduceResponse = kafboy_producer:async_batch(Topic, Json, []),
-            reply("{\"ok\":true}",Req);
+            R = reply("{\"ok\":1}",Req),
+            spawn(fun()->
+                          kafboy_producer:async_batch(Topic, Message, [])
+                  end),
+            R;
 
         _Path ->
             ?INFO_MSG("dont know what to do with ~p",[_Path]),
-            reply("{\"error\":\"invalid\"}",Req)
+            fail({error,<<"invalid">>},Req, State)
     end.
 
 terminate(_Reason, _Req, _State) ->
     ok.
 
+reply(Json,Req) when is_list(Json)->
+    reply(ekaf_utils:atob(Json), Req);
 reply(Json,Req)->
-    cowboy_req:reply(200,[{<<"content-type">>, <<"application/json; charset=utf-8">>}], Json, Req).
+    {ok,Req1} = cowboy_req:reply(200,[{<<"content-type">>, <<"application/json; charset=utf-8">>}], Json, Req),
+    {ok, Req1, undefined}.

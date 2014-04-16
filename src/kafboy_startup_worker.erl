@@ -59,9 +59,7 @@ profile_modules(_Args)->
 
     case ?MODULE:read_env(kafboy_enable_trace) of
     {_,true} ->
-        dbg:start(),
-        dbg:tracer(),
-        dbg:p(all,[c]),
+        kafboy_logger:enable_trace(),
         lists:foldl(fun(ModToAdd,Acc)->
                 [
                  dbg:tpl({ModToAdd,FuncToAdd,'_'},[])

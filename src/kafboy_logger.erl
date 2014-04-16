@@ -25,6 +25,11 @@ enabled_modules()->
 enabled_functions()->
     ['_'].
 
+enable_trace()->
+    dbg:start(),
+    dbg:tracer(),
+    dbg:p(all,[c]).
+
 enable_module(Mod)->
     gen_server:call(kafboy_startup_worker,{log,enable_module,Mod}).
 
