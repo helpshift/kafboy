@@ -47,15 +47,19 @@ handle_method(_, Req, State)->
 handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = Callback} = State)->
     Self = self(),
     spawn(fun()->
-                  {ok, Body, _} = cowboy_req:body_qs(Req),
-                  case Callback of
-                      {M,F} when is_atom(M), is_atom(F)->
-                          NextCallback = fun(NextBody)->
-                                                 Self ! {edit_json_callback, NextBody}
-                                         end,
-                          M:F(Req, Body, NextCallback);
+                  case cowboy_req:body_qs(Req) of
+                      {ok, Body, _} ->
+                          case Callback of
+                              {M,F} when is_atom(M), is_atom(F)->
+                                  NextCallback = fun(NextBody)->
+                                                         Self ! {edit_json_callback, NextBody}
+                                                 end,
+                                  M:F(Req, Body, NextCallback);
+                              _ ->
+                                  Self ! {edit_json_callback, Body}
+                          end;
                       _ ->
-                          Self ! {edit_json_callback, Body}
+                          Self ! {edit_json_callback, {error,<<"no_body">>}}
                   end
           end),
     {loop, Req, State, 1000}.
@@ -77,6 +81,8 @@ fail(_Msg, Req, _State) ->
     Req1 = cowboy_req:reply(500, [], <<"{\"error\":\"unknown\"">>, Req),
     {ok, Req1, undefined}.
 
+info({edit_json_callback,{200,Message}}, Req, _State)->
+    reply(Message,Req);
 info({edit_json_callback,{error,_}=Error}, Req, _State)->
     fail(Error,Req,_State);
 info({edit_json_callback,[]}, Req, _State)->

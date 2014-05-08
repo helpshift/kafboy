@@ -16,7 +16,7 @@
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
 %% ------------------------------------------------------------------
--export([start_link/1]).
+-export([start/0, start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
@@ -47,7 +47,7 @@ profile_modules(_Args)->
     application:start(runtime_tools),
 
     case ?MODULE:read_env(kafboy_profiling_apps) of
-        {ProfilingApps,true} ->
+        {true,ProfilingApps} ->
             [ application:start(ProfilingApp) || ProfilingApp <- ProfilingApps ];
         _E ->
             ok
@@ -79,6 +79,9 @@ profile_modules(_Args)->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
+start()->
+    start_link([]).
+
 start_link(Args) ->
      gen_server:start_link({local,?SERVER}, ?MODULE, Args,[]).
 
@@ -168,7 +171,7 @@ kickoff_slave(_Args)->
     %% ask master to allow location transparent access
     %%  of tables to this node
     case ?MODULE:read_env(kafboy_load_balancer) of
-        {DiscoUrl,true} ->
+        {true,DiscoUrl} ->
             case httpc:request(get, {DiscoUrl, []}, [
                                                      %% TODO: ssl support ?
                                                      %% {ssl,[{verify,verify_peer}]}
@@ -201,7 +204,7 @@ slave_added(_SlaveNode)->
 
 cookie_setup()->
     case ?MODULE:read_env(kafboy_set_cookie) of
-        {CookieVal,true} ->
+        {true,CookieVal} ->
             erlang:set_cookie(node(),CookieVal);
         _ ->
             ok
