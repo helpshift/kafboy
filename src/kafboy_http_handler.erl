@@ -47,6 +47,7 @@ handle_method(_, Req, State)->
 handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = Callback} = State)->
     Self = self(),
     spawn(fun()->
+                  {Topic, _} = cowboy_req:binding(topic, Req),
                   case cowboy_req:body_qs(Req) of
                       {ok, Body, _} ->
                           case Callback of
@@ -54,7 +55,7 @@ handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = Callback} = St
                                   NextCallback = fun(NextBody)->
                                                          Self ! {edit_json_callback, NextBody}
                                                  end,
-                                  M:F(Req, Body, NextCallback);
+                                  M:F(Topic, Req, Body, NextCallback);
                               _ ->
                                   Self ! {edit_json_callback, Body}
                           end;
