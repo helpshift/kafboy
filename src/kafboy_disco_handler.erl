@@ -23,7 +23,7 @@ handle_method(<<"POST">>, Req, _State)->
                _ ->
                    []
            end,
-    Json = jsx:encode(Body),
+    Json = jsonx:encode(Body),
     cowboy_req:reply(200, [
                            {<<"content-type">>, <<"application/json; charset=utf-8">>}
                           ], Json, Req);

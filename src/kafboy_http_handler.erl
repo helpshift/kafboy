@@ -4,7 +4,7 @@
 -module(kafboy_http_handler).
 -behaviour(cowboy_loop_handler).
 -export([init/3]).
--export([handle/2, handle_method/3, handle_url/4, info/3]).
+-export([handle/2, handle_method/3, handle_url/5, info/3]).
 -export([terminate/3]).
 
 -export([test_callback_edit_json/2]).
@@ -44,26 +44,36 @@ handle_method(<<"POST">>, Req, State)->
 handle_method(_, Req, State)->
    fail(<<"unexp">>, Req, State).
 
-handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = Callback} = State)->
+handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = {M,F}} = State)->
     Self = self(),
     spawn(fun()->
                   {Topic, _} = cowboy_req:binding(topic, Req),
-                  case cowboy_req:body_qs(Req) of
+                  case
+                      cowboy_req:body_qs(Req)
+                      of
                       {ok, Body, _} ->
-                          case Callback of
-                              {M,F} when is_atom(M), is_atom(F)->
-                                  NextCallback = fun(NextBody)->
-                                                         Self ! {edit_json_callback, NextBody}
-                                                 end,
-                                  M:F(Topic, Req, Body, NextCallback);
-                              _ ->
-                                  Self ! {edit_json_callback, Body}
-                          end;
+                          NextCallback = fun(NextBody)->
+                                                 Self ! {edit_json_callback, Topic, NextBody}
+                                         end,
+                          M:F(Topic, Req, Body, NextCallback);
                       _ ->
                           Self ! {edit_json_callback, {error,<<"no_body">>}}
                   end
           end),
-    {loop, Req, State, 1000}.
+    {loop, Req, State, 500};
+%% No callback
+handle_edit_json_callback(Req, State)->
+    Self = self(),
+    case
+        cowboy_req:body_qs(Req)
+        of
+        {ok, Body, _} ->
+            {Topic, _} = cowboy_req:binding(topic, Req),
+            Self ! {edit_json_callback, Topic, Body};
+        _ ->
+            Self ! {edit_json_callback, {error,<<"no_body">>}}
+    end,
+    {loop, Req, State, 500}.
 
 handle(Req, {error,queue_full}=State)->
     fail(<<"system queue full">>, Req, State);
@@ -88,7 +98,7 @@ info({edit_json_callback,{error,_}=Error}, Req, _State)->
     fail(Error,Req,_State);
 info({edit_json_callback,[]}, Req, _State)->
     fail({error,<<"empty">>},Req, _State);
-info({edit_json_callback,Body}, Req, State)->
+info({edit_json_callback, Topic, Body}, Req, State)->
     %% Produce to topic
 
     %% See bosky101/ekaf for what happens under the hood
@@ -96,7 +106,7 @@ info({edit_json_callback,Body}, Req, State)->
 
     case cowboy_req:path(Req) of
         {Url,_} ->
-            handle_url(Url, Body, Req, State);
+            handle_url(Url, Topic, Body, Req, State);
         _Path ->
             ?INFO_MSG("dont know what to do with ~p",[_Path]),
             fail(<<"invalid">>,Req,State)
@@ -105,39 +115,38 @@ info(Message, Req, State) ->
     ?INFO_MSG("unexp ~p",[Message]),
     fail({error,<<"unexp">>}, Req, State).
 
-handle_url(<<"/safe/",Url/binary>>, Body, Req, State)->
-    handle_url(<<"/",Url/binary>>, Body, Req, State);
-handle_url(_Url, {error,Reason}, Req, State)->
+handle_url(<<"/safe/",Url/binary>>, Topic, Body, Req, State)->
+    handle_url(<<"/",Url/binary>>, Topic, Body, Req, State);
+handle_url(_Url, Topic, {error,Reason}, Req, State)->
     fail(Reason, Req, State);
-handle_url(Url, Message, Req, State)->
+handle_url(Url, Topic, Message, Req, State)->
     case Url of
-        <<"/sync/",Topic/binary>> ->
-            ProduceResponse = kafboy_producer:sync(Topic, Message, []),
-            %% in case you want to create your own list, see the below function
-            ResponseList = ekaf_lib:response_to_proplist(ProduceResponse),
-            ResponseJson = jsx:encode(ResponseList),
-            reply(ResponseJson,Req);
-
-        <<"/batch/sync/",Topic/binary>> ->
-            R = reply("{\"ok\":1}",Req),
+        <<"/batch/async/",_/binary>> ->
+            R = reply(<<"{\"ok\":1}">>,Req),
+            spawn(fun()->
+                          kafboy_producer:async_batch(Topic, Message, [])
+                  end),
+            R;
+        <<"/batch/sync/",_/binary>> ->
+            R = reply(<<"{\"ok\":1}">>,Req),
             spawn(fun()->
                           kafboy_producer:sync_batch(Topic, Message, [])
                   end),
             R;
 
-        <<"/async/",Topic/binary>> ->
-            R = reply("{\"ok\":1}",Req),
+        <<"/async/",_/binary>> ->
+            R = reply(<<"{\"ok\":1}">>,Req),
             spawn(fun()->
                           kafboy_producer:async(Topic, Message, [])
                   end),
             R;
 
-        <<"/batch/async/",Topic/binary>> ->
-            R = reply("{\"ok\":1}",Req),
-            spawn(fun()->
-                          kafboy_producer:async_batch(Topic, Message, [])
-                  end),
-            R;
+        <<"/sync/",_/binary>> ->
+            ProduceResponse = kafboy_producer:sync(Topic, Message, []),
+            %% in case you want to create your own list, see the below function
+            ResponseList = ekaf_lib:response_to_proplist(ProduceResponse),
+            ResponseJson = jsonx:encode(ResponseList),
+            reply(ResponseJson,Req);
 
         _Path ->
             ?INFO_MSG("dont know what to do with ~p",[_Path]),
