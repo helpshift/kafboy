@@ -145,7 +145,7 @@ handle_url(Url, Topic, Message, Req, State)->
             ProduceResponse = kafboy_producer:sync(Topic, Message, []),
             %% in case you want to create your own list, see the below function
             ResponseList = ekaf_lib:response_to_proplist(ProduceResponse),
-            ResponseJson = jsonx:encode(ResponseList),
+            ResponseJson = jsx:encode(ResponseList),
             reply(ResponseJson,Req);
 
         _Path ->

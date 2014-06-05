@@ -9,6 +9,7 @@
         kernel,
         stdlib,
         cowboy,
+        jsx,
         %exometer,
         ekaf
     ]},
