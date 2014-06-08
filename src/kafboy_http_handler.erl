@@ -6,7 +6,7 @@
 -export([init/3]).
 -export([handle/2, handle_method/3, handle_url/5, info/3]).
 -export([terminate/3]).
-
+-define(DEFAULT_HEADER,[{<<"content-type">>, <<"application/json; charset=utf-8">>}]).
 -export([test_callback_edit_json/2]).
 
 %% includes
@@ -29,7 +29,6 @@ handle_method(<<"POST">>, Req, #kafboy_http{ safe = false } = State)->
 
 handle_method(<<"POST">>, Req, State)->
     case sv:run(kafboy_q, fun() ->
-                                  io:format("~n via sv",[]),
                                   handle_edit_json_callback(Req, State)
                           end) of
         {ok,Next} ->
@@ -41,8 +40,12 @@ handle_method(<<"POST">>, Req, State)->
             ?INFO_MSG("error, queue_overload",[]),
             {ok, Req, Error}
     end;
+handle_method(<<"GET">>, Req, State)->
+    {ok, Req1, Next} = fail(<<"POST exp">>, Req, State),
+    {loop, Req1, Next, 500};
 handle_method(_, Req, State)->
-   fail(<<"unexp">>, Req, State).
+    {ok,Req1,Next} = fail(<<"unexp">>, Req, State),
+    {loop, Req1, Next, 500}.
 
 handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = {M,F}} = State)->
     Self = self(),
@@ -79,6 +82,8 @@ handle(Req, {error,queue_full}=State)->
     fail(<<"system queue full">>, Req, State);
 handle(Req, {error,overload}=State)->
     fail(<<"system overload">>, Req, State);
+handle(Req, {error,Msg}=State)->
+    fail(Msg, Req, State);
 handle(Req, State)->
     {Method, _} = cowboy_req:method(Req),
     handle_method(Method, Req, State).
@@ -86,10 +91,10 @@ handle(Req, State)->
 fail({error,Msg}, Req, _State) ->
     fail(Msg,Req,_State);
 fail(Msg, Req, _State) when is_binary(Msg) ->
-    {ok,Req1} = cowboy_req:reply(500,[{<<"content-type">>, <<"application/json; charset=utf-8">>}], <<"{\"error\":\"",Msg/binary,"\"}">>, Req),
+    {ok,Req1} = cowboy_req:reply(500,?DEFAULT_HEADER, <<"{\"error\":\"",Msg/binary,"\"}">>, Req),
     {ok, Req1, undefined};
 fail(_Msg, Req, _State) ->
-    Req1 = cowboy_req:reply(500, [], <<"{\"error\":\"unknown\"">>, Req),
+    Req1 = cowboy_req:reply(500, ?DEFAULT_HEADER, <<"{\"error\":\"unknown\"">>, Req),
     {ok, Req1, undefined}.
 
 info({edit_json_callback,{200,Message}}, Req, _State)->
@@ -117,7 +122,7 @@ info(Message, Req, State) ->
 
 handle_url(<<"/safe/",Url/binary>>, Topic, Body, Req, State)->
     handle_url(<<"/",Url/binary>>, Topic, Body, Req, State);
-handle_url(_Url, Topic, {error,Reason}, Req, State)->
+handle_url(_Url, _Topic, {error,Reason}, Req, State)->
     fail(Reason, Req, State);
 handle_url(Url, Topic, Message, Req, State)->
     case Url of
