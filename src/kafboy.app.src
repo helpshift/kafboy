@@ -1,8 +1,8 @@
 %% Feel free to use, reuse and abuse the code in this file.
 
 {application, kafboy, [
-    {description, "intelligent http wrapper over kafka"},
-    {vsn, "git"},
+    {description, "http gateway for the ekaf kafka producer"},
+    {vsn, "0.2.0"},
     {modules, [kafboy_app,kafboy_sup,kafboy_startup_worker,kafboy_http_handler]},
     {registered, []},
     {applications, [
@@ -10,7 +10,6 @@
         stdlib,
         cowboy,
         jsx,
-        %exometer,
         ekaf
     ]},
     {mod, {kafboy_app, []}},

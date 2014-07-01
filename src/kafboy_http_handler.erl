@@ -49,29 +49,34 @@ handle_method(_, Req, State)->
 
 handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = {M,F}} = State)->
     Self = self(),
+    % NOTE: the cowboy_req:body_qs, and read buffer should be bound in the same proess
+    %       filed an issue, got an explanation at
+    %       https://github.com/extend/cowboy/issues/718
+    ReqBody = cowboy_req:body_qs(Req),
     spawn(fun()->
-                  {Topic, _} = cowboy_req:binding(topic, Req),
                   case
-                      cowboy_req:body_qs(Req)
+                      ReqBody
                       of
-                      {ok, Body, _} ->
+                      {ok, Body, Req1} ->
+                          {Topic, _} = cowboy_req:binding(topic, Req1),
                           NextCallback = fun(NextBody)->
                                                  Self ! {edit_json_callback, Topic, NextBody}
                                          end,
                           M:F(Topic, Req, Body, NextCallback);
-                      _ ->
+                      _E ->
                           Self ! {edit_json_callback, {error,<<"no_body">>}}
                   end
           end),
     {loop, Req, State, 500};
 %% No callback
 handle_edit_json_callback(Req, State)->
+    ReqBody = cowboy_req:body_qs(Req),
     Self = self(),
     case
-        cowboy_req:body_qs(Req)
+        ReqBody
         of
-        {ok, Body, _} ->
-            {Topic, _} = cowboy_req:binding(topic, Req),
+        {ok, Body, Req1} ->
+            {Topic, _} = cowboy_req:binding(topic, Req1),
             Self ! {edit_json_callback, Topic, Body};
         _ ->
             Self ! {edit_json_callback, {error,<<"no_body">>}}
