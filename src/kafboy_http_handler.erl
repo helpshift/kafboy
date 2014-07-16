@@ -62,7 +62,7 @@ handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = {M,F}} = State
                           NextCallback = fun(NextBody)->
                                                  Self ! {edit_json_callback, Topic, NextBody}
                                          end,
-                          M:F(Topic, Req, Body, NextCallback);
+                          M:F({post, Topic, Req, Body, NextCallback});
                       _E ->
                           Self ! {edit_json_callback, {error,<<"no_body">>}}
                   end
@@ -93,12 +93,14 @@ handle(Req, State)->
     {Method, _} = cowboy_req:method(Req),
     handle_method(Method, Req, State).
 
-fail({error,Msg}, Req, _State) ->
-    fail(Msg,Req,_State);
-fail(Msg, Req, _State) when is_binary(Msg) ->
+fail({error,Msg}, Req, State) ->
+    fail(Msg, Req, State);
+fail(Msg, Req, #kafboy_http{ callback_edit_json = {M,F}} = _State) when is_binary(Msg) ->
+    M:F({error, 500, Msg}),
     {ok,Req1} = cowboy_req:reply(500,?DEFAULT_HEADER, <<"{\"error\":\"",Msg/binary,"\"}">>, Req),
     {ok, Req1, undefined};
-fail(_Msg, Req, _State) ->
+fail(_Msg, Req, #kafboy_http{ callback_edit_json = {M,F}} = _State) ->
+    M:F({error, 500, _Msg}),
     Req1 = cowboy_req:reply(500, ?DEFAULT_HEADER, <<"{\"error\":\"unknown\"">>, Req),
     {ok, Req1, undefined}.
 

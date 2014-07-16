@@ -2,7 +2,7 @@
 
 {application, kafboy, [
     {description, "http gateway for the ekaf kafka producer"},
-    {vsn, "0.2.0"},
+    {vsn, "0.3.0"},
     {modules, [kafboy_app,kafboy_sup,kafboy_startup_worker,kafboy_http_handler]},
     {registered, []},
     {applications, [

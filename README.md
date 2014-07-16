@@ -58,7 +58,8 @@ Here is an example safetyvalve entry expected
     {kafboy,[
         % optional. you get to edit the json before it goes to kafka over here
         {kafboy_callback_edit_json, {my_module, massage_json}},
-        % M:F(Topic, Req, Json, Callback) will be called. Once you're done editing `Callback(Edited)`
+        % M:F({post, Topic, Req, Json, Callback}) will be called. return with what you want to send to kafka
+        % if an error occurs M:F({error, StatusCode, Message}) wil be called
 
         % optional.
         {kafboy_enable_safetyvalve, false},
