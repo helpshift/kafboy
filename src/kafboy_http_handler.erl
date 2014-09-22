@@ -52,22 +52,16 @@ handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = {M,F}} = State
     % NOTE: the cowboy_req:body_qs, and read buffer should be bound in the same proess
     %       filed an issue, got an explanation at
     %       https://github.com/extend/cowboy/issues/718
-    ReqBody = cowboy_req:body_qs(Req),
-    spawn(fun()->
-                  case
-                      ReqBody
-                      of
-                      {ok, Body, Req1} ->
-                          {Topic, _} = cowboy_req:binding(topic, Req1),
-                          NextCallback = fun(NextBody)->
-                                                 Self ! {edit_json_callback, Topic, NextBody}
-                                         end,
-                          M:F({post, Topic, Req, Body, NextCallback});
-                      _E ->
-                          Self ! {edit_json_callback, {error,<<"no_body">>}}
-                  end
-          end),
-    {loop, Req, State, 500};
+    NextReq = case cowboy_req:body_qs(Req) of
+                  {ok, Body, Req1} ->
+                      {Topic, _} = cowboy_req:binding(topic, Req1),
+                      spawn(fun()-> M:F({post, Topic, Req1, Body, Self}) end),
+                      Req1;
+                  _E ->
+                      Self ! {edit_json_callback, {error,<<"no_body">>}},
+                      Req
+    end,
+    {loop, NextReq, State, 500};
 %% No callback
 handle_edit_json_callback(Req, State)->
     ReqBody = cowboy_req:body_qs(Req),
@@ -113,6 +107,8 @@ info({edit_json_callback,[]}, Req, _State)->
 info({edit_json_callback, Topic, Body}, Req, State)->
     %% Produce to topic
 
+    log("in nextbody"),
+
     %% See bosky101/ekaf for what happens under the hood
     %% connection pooling, batched writes, and so on
 
@@ -127,6 +123,13 @@ info(Message, Req, State) ->
     ?INFO_MSG("unexp ~p",[Message]),
     fail({error,<<"unexp">>}, Req, State).
 
+log(S)->
+    log(S,[]).
+
+log(S,A)->
+    ok.
+    %?INFO_MSG("~w "++S,[ekaf_utils:epoch()|A]).
+
 handle_url(<<"/safe/",Url/binary>>, Topic, Body, Req, State)->
     handle_url(<<"/",Url/binary>>, Topic, Body, Req, State);
 handle_url(_Url, _Topic, {error,Reason}, Req, State)->
@@ -135,6 +138,7 @@ handle_url(Url, Topic, Message, Req, State)->
     case Url of
         <<"/batch/async/",_/binary>> ->
             R = reply(<<"{\"ok\":1}">>,Req),
+            log("send reply"),
             spawn(fun()->
                           kafboy_producer:async_batch(Topic, Message, [])
                   end),
