@@ -71,7 +71,37 @@ Here is an example safetyvalve entry expected
         % can be used to distribute work to other nodes if ekaf thinks this one is too busy
     ]}
 
+In this example, you have to implement my_module:massage_json/1, on the lines of
+
+    massage_json({post, Topic, Req, Body, Callback})->
+        Callback ! { edit_json_callback, Topic, Body }.
+
+
+Here is a more elaborate example:
+
+    %% Let's check for the contents of Body
+    %% and if its valid, add an extra field
+    %% and then submit to kafka
+    massage_json({post, Topic, Req, Body, Callback})->
+        case Body of
+            [{<<"test">>},<<"a">>}] ->
+                % either reply like this
+                Callback ! { edit_json_callback, Topic, [{<<"a">>,<<"apple"}] };
+            [] ->
+                Calback ! {error, <<"you cant send empty">>};
+            _ ->
+                %% i want to first reply
+                Callback ! { 200, <<"fast reply">>},
+
+                %% then directly call ekaf
+                Final = jsx:encode([{<<"extra">>,<<"true">>}| Body]),
+                ekaf:produce_async_batched(Topic, Final)
+        end.
+
 kafboy will handle sending batch requests where the batch size is configurable, disconnections with brokers, and max retries.
+
+To see the API of ekaf, see http://github.com/helpshift/ekaf
+
 
 ## Configuring ekaf
 
@@ -128,6 +158,4 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### Goals for v0.2
-* Compression when publishing
-* Add a feature request at https://github.com/helpshift/ekaf or check the ekaf web server at https://github.com/helpshift/ekafboy
+Add a feature request at https://github.com/helpshift/ekaf or check the ekaf web server at https://github.com/helpshift/kafboy
