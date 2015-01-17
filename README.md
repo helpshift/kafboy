@@ -82,26 +82,49 @@ Here is a more elaborate example:
     %% Let's check for the contents of Body
     %% and if its valid, add an extra field
     %% and then submit to kafka
-    massage_json({post, Topic, Req, Body, Callback})->
+    massage_json({post, Topic, _Req, Body, CallbackPid})->
         case Body of
-            [{<<"test">>},<<"a">>}] ->
+            [{<<"hello">>, Foo}] ->
                 % either reply like this
-                Callback ! { edit_json_callback, Topic, [{<<"a">>,<<"apple"}] };
+                CallbackPid ! { edit_json_callback, Topic, Foo };
             [] ->
-                Calback ! {error, <<"you cant send empty">>};
+                CallbackPid ! {error, <<Topic/binary,".insufficient">>};
             _ ->
                 %% i want to first reply
-                Callback ! { 200, <<"fast reply">>},
-
-                %% then directly call ekaf
+                CallbackPid ! { edit_json_callback, {200, <<"{\"ok\":\"fast reply\"}">>}},
+    
+                %% then directly call ekaf, adding this msg to a batch
                 Final = jsx:encode([{<<"extra">>,<<"true">>}| Body]),
                 ekaf:produce_async_batched(Topic, Final)
-        end.
+        end;
+    massage_json({error, Status, Message}) ->
+        io:format("~n some ~p error: ~p",[Status, Message]),
+        ok.
+
 
 kafboy will handle sending batch requests where the batch size is configurable, disconnections with brokers, and max retries.
 
 To see the API of ekaf, see http://github.com/helpshift/ekaf
 
+## Quick start
+
+On terminal 1
+
+    git clone https://github.com/helpshift/kafboy
+    cd kafboy
+    rebar get-deps compile
+    erl -pa deps/*/ebin -pa ebin -s kafboy_demo
+
+On terminal 2
+
+    curl localhost:9903/batch/async/ekaf -XPOST  -d 'test=a'
+    {"ok":"fast reply"}
+     
+    curl localhost:9903/batch/async/ekaf -XPOST  -d 'hello=a'
+    {"ok":1}
+    
+    curl localhost:9903/batch/async/ekaf -XPOST 
+    {"error":"unexp"}
 
 ## Configuring ekaf
 
@@ -114,9 +137,6 @@ To see the API of ekaf, see http://github.com/helpshift/ekaf
         % pass the {BrokerHost,Port} of atleast one permanent broker. Ideally should be
         %       the IP of a load balancer so that any broker can be contacted
 
-
-        % required
-        {ekaf_bootstrap_topics, [ <<"topic">> ]},
 
         % optional
         {ekaf_per_partition_workers,100},
