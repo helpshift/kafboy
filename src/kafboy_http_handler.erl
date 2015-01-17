@@ -106,9 +106,6 @@ info({edit_json_callback,[]}, Req, _State)->
     fail({error,<<"empty">>},Req, _State);
 info({edit_json_callback, Topic, Body}, Req, State)->
     %% Produce to topic
-
-    log("in nextbody"),
-
     %% See bosky101/ekaf for what happens under the hood
     %% connection pooling, batched writes, and so on
 
@@ -119,16 +116,8 @@ info({edit_json_callback, Topic, Body}, Req, State)->
             ?INFO_MSG("dont know what to do with ~p",[_Path]),
             fail(<<"invalid">>,Req,State)
     end;
-info(Message, Req, State) ->
-    ?INFO_MSG("unexp ~p",[Message]),
+info(_Message, Req, State) ->
     fail({error,<<"unexp">>}, Req, State).
-
-log(S)->
-    log(S,[]).
-
-log(S,A)->
-    ok.
-    %?INFO_MSG("~w "++S,[ekaf_utils:epoch()|A]).
 
 handle_url(<<"/safe/",Url/binary>>, Topic, Body, Req, State)->
     handle_url(<<"/",Url/binary>>, Topic, Body, Req, State);
@@ -138,7 +127,6 @@ handle_url(Url, Topic, Message, Req, State)->
     case Url of
         <<"/batch/async/",_/binary>> ->
             R = reply(<<"{\"ok\":1}">>,Req),
-            log("send reply"),
             spawn(fun()->
                           kafboy_producer:async_batch(Topic, Message, [])
                   end),
