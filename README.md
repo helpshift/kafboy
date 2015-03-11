@@ -69,6 +69,11 @@ Here is an example safetyvalve entry expected
         {kafboy_load_balancer, "http://localhost:8080/disco"}
         % should return plaintext of a node name with the right cookie eg: `node2@some-host`
         % can be used to distribute work to other nodes if ekaf thinks this one is too busy
+
+        % optional, see more in kafboy_app.erl
+        {kafboy_routes_async_batch,["/1/foo/:topic"]},
+        {kafboy_routes_async,[]},
+        {kafboy_routes_sync,[]}
     ]}
 
 In this example, you have to implement my_module:massage_json/1, on the lines of

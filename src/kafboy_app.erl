@@ -36,33 +36,48 @@ start(_StartType, _StartArgs) ->
             start_with_ekaf(_StartType, _StartArgs)
     end.
 
+%%%
+%%% {kafboy_routes_async_batch, ["/events/:topic/"]}
+%%% {kafboy_routes_async,       ["/api/:topic/1/"]}
+get_config_urls(#kafboy_http{ sync = false, batch = true } = State)->
+    [ {Url, kafboy_http_handler, State } || Url <- get_default(kafboy_routes_async_batch, [])];
+get_config_urls(#kafboy_http{ sync = true } = State) ->
+    [ {Url, kafboy_http_handler, State } || Url <- get_default(kafboy_routes_sync, [])];
+get_config_urls(#kafboy_http{ sync = false } = State) ->
+    [ {Url, kafboy_http_handler, State } || Url <- get_default(kafboy_routes_async, [])].
+
+get_routes(InitState)->
+    [InitState#kafboy_http{ sync=false, batch=true},
+     InitState#kafboy_http{ sync=true },
+     InitState#kafboy_http{ sync=false }].
+
 start_with_ekaf(_StartType, _StartArgs)->
     Safe = get_default(kafboy_enable_safetyvalve, false),
     SyncUrl = get_default(kafboy_sync_url,?KAFBOY_DEFAULT_SYNC_URL),
     AsyncUrl = get_default(kafboy_async_url,?KAFBOY_DEFAULT_ASYNC_URL),
     Port = get_default(kafboy_http_port,?KAFBOY_DEFAULT_HTTP_PORT),
-    EditJsonCallback = get_default(kafboy_callback_edit_json, undefined),
-
     AuthCallback = get_default(kafboy_callback_auth, undefined),
-
+    EditJsonCallback = get_default(kafboy_callback_edit_json, undefined),
     InitState = #kafboy_http{ callback_edit_json  = EditJsonCallback, callback_auth = AuthCallback, safe = Safe },
+    CustomUrls = lists:foldl(fun(TempState,Acc)->
+                                     get_config_urls(TempState) ++ Acc
+                             end,[], get_routes(InitState)),
+    Dispatch = cowboy_router:compile([{'_',
+                                       CustomUrls ++
+                                       [{"/echo_post", kafboy_disco_handler,InitState},
+                                        {"/disco",     kafboy_disco_handler,InitState},
 
-    Dispatch = cowboy_router:compile([
-                                      {'_', [
-                                             {"/echo_post", kafboy_disco_handler,InitState},
-                                             {"/disco",     kafboy_disco_handler,InitState},
+                                        {SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ }},
+                                        {AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync = false}},
 
-                                             {SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ }},
-                                             {AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync = false}},
+                                        {"/batch/"++SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ batch=true}},
+                                        {"/batch/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, batch=true}},
 
-                                             {"/batch/"++SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ batch=true}},
-                                             {"/batch/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, batch=true}},
+                                        {"/safe/"++SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ sync=true, safe=true}},
+                                        {"/safe/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, safe=true}},
 
-                                             {"/safe/"++SyncUrl,  kafboy_http_handler, InitState#kafboy_http{ sync=true, safe=true}},
-                                             {"/safe/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, safe=true}},
-
-                                             {"/safe/batch/"++SyncUrl, kafboy_http_handler, InitState#kafboy_http{ batch=true, safe=true}},
-                                             {"/safe/batch/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, batch=true, safe=true}}
+                                        {"/safe/batch/"++SyncUrl, kafboy_http_handler, InitState#kafboy_http{ batch=true, safe=true}},
+                                        {"/safe/batch/"++AsyncUrl, kafboy_http_handler, InitState#kafboy_http{ sync=false, batch=true, safe=true}}
                                             ]}
                                      ]),
     %?INFO_MSG("start with port ~p syncurl ~p asyncurl ~p",[Port,SyncUrl,AsyncUrl]),
