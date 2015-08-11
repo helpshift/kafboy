@@ -90,12 +90,12 @@ handle(Req, State)->
 fail({error,Msg}, Req, State) ->
     fail(Msg, Req, State);
 fail(Msg, Req, #kafboy_http{ callback_edit_json = {M,F}} = _State) when is_binary(Msg) ->
-    M:F({error, 500, Msg}),
-    {ok,Req1} = cowboy_req:reply(500,?DEFAULT_HEADER, <<"{\"error\":\"",Msg/binary,"\"}">>, Req),
+    M:F({error, 400, Msg}),
+    {ok,Req1} = cowboy_req:reply(400,?DEFAULT_HEADER, <<"{\"error\":\"",Msg/binary,"\"}">>, Req),
     {ok, Req1, undefined};
 fail(_Msg, Req, #kafboy_http{ callback_edit_json = {M,F}} = _State) ->
-    M:F({error, 500, _Msg}),
-    Req1 = cowboy_req:reply(500, ?DEFAULT_HEADER, <<"{\"error\":\"unknown\"">>, Req),
+    M:F({error, 400, _Msg}),
+    Req1 = cowboy_req:reply(400, ?DEFAULT_HEADER, <<"{\"error\":\"unknown\"">>, Req),
     {ok, Req1, undefined}.
 
 info({edit_json_callback,{200,Message}}, Req, _State)->
@@ -108,14 +108,16 @@ info({edit_json_callback, Topic, Body}, Req, State)->
     %% Produce to topic
     %% See bosky101/ekaf for what happens under the hood
     %% connection pooling, batched writes, and so on
-
     case cowboy_req:path(Req) of
         {Url,_} ->
-            handle_url(Url, Topic, Body, Req, State);
+            info({edit_json_callback, Topic, Body, Url}, Req, State);
         _Path ->
-            ?INFO_MSG("dont know what to do with ~p",[_Path]),
+            ?INFO_MSG("info/3 dont know what to do with ~p",[_Path]),
             fail(<<"invalid">>,Req,State)
     end;
+info({edit_json_callback, Topic, Body, Url}, Req, State)->
+    handle_url(Url, Topic, Body, Req, State);
+
 info(_Message, Req, State) ->
     fail({error,<<"unexp">>}, Req, State).
 
@@ -153,7 +155,7 @@ handle_url(Url, Topic, Message, Req, State)->
             reply(ResponseJson,Req);
 
         _Path ->
-            ?INFO_MSG("dont know what to do with ~p",[_Path]),
+            ?INFO_MSG("handle_url/5: dont know what to do with ~p",[_Path]),
             fail({error,<<"invalid">>},Req, State)
     end.
 
