@@ -2,9 +2,12 @@
 %% @end
 -module(kafboy_disco_handler).
 
--export([init/3]).
--export([handle/2]).
--export([terminate/3]).
+-include("kafboy_definitions.hrl").
+
+-export([init/3,
+         handle/2,
+         handle_method/3,
+         terminate/3]).
 
 init(_Transport, Req, State) ->
     {ok, Req, State}.
