@@ -22,48 +22,25 @@ init(_Transport, Req, InitState) ->
     {Method, _} = cowboy_req:method(Req),
     handle_method(Method, Req, InitState).
 
-%% if not safe, then directly call handle_edit_json_callback
-%% if safe, then safetyvalve is called if sv thinks its ok
-handle_method(<<"POST">>, Req, #kafboy_http{ safe = false } = State)->
-    handle_edit_json_callback(Req, State);
-
-handle_method(<<"POST">>, Req, State)->
-    case sv:run(kafboy_q, fun() ->
-                                  handle_edit_json_callback(Req, State)
-                          end) of
-        {ok,Next} ->
-            Next;
-        {error, queue_full} = Error->
-            ?INFO_MSG("error, queue_full",[]),
-            {ok, Req, Error};
-        {error, overload} = Error ->
-            ?INFO_MSG("error, queue_overload",[]),
-            {ok, Req, Error}
-    end;
 handle_method(<<"GET">>, Req, State)->
     {ok, Req1, Next} = fail(<<"POST exp">>, Req, State),
-    {loop, Req1, Next, 500};
-handle_method(_, Req, State)->
-    {ok,Req1,Next} = fail(<<"unexp">>, Req, State),
-    {loop, Req1, Next, 500}.
-
-handle_edit_json_callback(Req, #kafboy_http{ callback_edit_json = {M,F}} = State)->
+    {shutdown, Req1, Next};
+handle_method(<<"POST">>, Req, #kafboy_http{ callback_edit_json = {M,F}} = State)->
     Self = self(),
     % NOTE: the cowboy_req:body_qs, and read buffer should be bound in the same proess
     %       filed an issue, got an explanation at
     %       https://github.com/extend/cowboy/issues/718
-    NextReq = case cowboy_req:body_qs(Req) of
-                  {ok, Body, Req1} ->
-                      {Topic, _} = cowboy_req:binding(topic, Req1),
-                      spawn(fun()-> M:F({post, Topic, Req1, Body, Self}) end),
-                      Req1;
-                  _E ->
-                      Self ! {edit_json_callback, {error,<<"no_body">>}},
-                      Req
-    end,
-    {loop, NextReq, State, 500};
+    case cowboy_req:body_qs(Req) of
+        {ok, Body, _} ->
+            {Topic, _} = cowboy_req:binding(topic, Req),
+            M:F({post, Topic, Req, Body, Self}),
+            {loop, Req, State};
+        _E ->
+            {ok, Req1, Next} = fail(<<"no_body">>, Req, State),
+            {shutdown, Req1, Next}
+    end;
 %% No callback
-handle_edit_json_callback(Req, State)->
+handle_method(_Method, Req, State)->
     ReqBody = cowboy_req:body_qs(Req),
     Self = self(),
     case
@@ -121,39 +98,26 @@ info({edit_json_callback, Topic, Body, Url}, Req, State)->
 info(_Message, Req, State) ->
     fail({error,<<"unexp">>}, Req, State).
 
-handle_url(<<"/safe/",Url/binary>>, Topic, Body, Req, State)->
-    handle_url(<<"/",Url/binary>>, Topic, Body, Req, State);
 handle_url(_Url, _Topic, {error,Reason}, Req, State)->
     fail(Reason, Req, State);
 handle_url(Url, Topic, Message, Req, State)->
     case Url of
         <<"/batch/async/",_/binary>> ->
             R = reply(<<"{\"ok\":1}">>,Req),
-            spawn(fun()->
-                          kafboy_producer:async_batch(Topic, Message, [])
-                  end),
+            kafboy_producer:async_batch(Topic, Message, []),
             R;
         <<"/batch/sync/",_/binary>> ->
-            R = reply(<<"{\"ok\":1}">>,Req),
-            spawn(fun()->
-                          kafboy_producer:sync_batch(Topic, Message, [])
-                  end),
-            R;
-
+            kafboy_producer:sync_batch(Topic, Message, []);
         <<"/async/",_/binary>> ->
             R = reply(<<"{\"ok\":1}">>,Req),
-            spawn(fun()->
-                          kafboy_producer:async(Topic, Message, [])
-                  end),
+            kafboy_producer:async(Topic, Message, []),
             R;
-
         <<"/sync/",_/binary>> ->
             ProduceResponse = kafboy_producer:sync(Topic, Message, []),
             %% in case you want to create your own list, see the below function
             ResponseList = ekaf_lib:response_to_proplist(ProduceResponse),
             ResponseJson = jsx:encode(ResponseList),
             reply(ResponseJson,Req);
-
         _Path ->
             ?INFO_MSG("handle_url/5: dont know what to do with ~p",[_Path]),
             fail({error,<<"invalid">>},Req, State)

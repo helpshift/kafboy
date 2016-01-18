@@ -30,28 +30,8 @@ Simply send a POST with the desired JSON, to one of the following paths
     % batch size, and flush timeout are configurable
     POST /batch/async/topic
 
-    % Use `safetyvalve` to limit performance degrade
-    POST /safe/async/topic
-    POST /safe/sync/topic
-    POST /safe/batch/async/topic
-    POST /safe/batch/sync/topic
-
 The payload is expected to be of the JSON format, but this can be configured to send the data as is.
 Very little else is done by this server in terms of dealing with kafka. It simply calls ekafka's produce function.
-
-## Safe urls
-
-Requests that begin with /safe/ will look for a `safetyvalve` entry to make the most of safetyvalve's ability to handle overload.
-
-Here is an example safetyvalve entry expected
-
-     %Note: You will have to add safetyvalve to your rebar.config or release as a dependency
-     %      for /safe/ urls to function as expected
-     {safetyvalve,
-         [{queues, [
-             {kafboy_q, [{hz, 50}, {rate, 1000}, {token_limit, 10000}, {size, 300000}, {concurrency, 300000}]}]
-         }
-     ]}
 
 ## Configuring kafboy
 
@@ -60,10 +40,6 @@ Here is an example safetyvalve entry expected
         {kafboy_callback_edit_json, {my_module, massage_json}},
         % M:F({post, Topic, Req, Json, Callback}) will be called. return with what you want to send to kafka
         % if an error occurs M:F({error, StatusCode, Message}) wil be called
-
-        % optional.
-        {kafboy_enable_safetyvalve, false},
-        % Not enabled by default
 
         % optional.
         {kafboy_load_balancer, "http://localhost:8080/disco"}
@@ -93,7 +69,7 @@ Here is a more elaborate example:
                 % either reply like this
                 CallbackPid ! { edit_json_callback, Topic, Foo };
             [] ->
-                CallbackPid ! {error, <<Topic/binary,".insufficient">>};
+                CallbackPid ! { edit_json_callback, {error, <<Topic/binary,".insufficient">>}};
             _ ->
                 %% i want to first reply
                 CallbackPid ! { edit_json_callback, {200, <<"{\"ok\":\"fast reply\"}">>}},
@@ -129,7 +105,7 @@ On terminal 2
     {"ok":1}
     
     curl localhost:9903/batch/async/ekaf -XPOST 
-    {"error":"unexp"}
+    {"error":"ekaf.insufficient"}
 
 ## Configuring ekaf
 

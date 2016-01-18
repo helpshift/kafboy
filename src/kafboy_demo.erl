@@ -17,11 +17,11 @@
 
 massage_json({post, Topic, _Req, Body, CallbackPid})->
     case Body of
+        [] ->
+            CallbackPid ! { edit_json_callback, {error, <<Topic/binary,".insufficient">>}};
         [{<<"hello">>, Foo}] ->
             % either reply like this
             CallbackPid ! { edit_json_callback, Topic, Foo };
-        [] ->
-            CallbackPid ! {error, <<Topic/binary,".insufficient">>};
         _ ->
             %% i want to first reply
             CallbackPid ! { edit_json_callback, {200, <<"{\"ok\":\"fast reply\"}">>}},
